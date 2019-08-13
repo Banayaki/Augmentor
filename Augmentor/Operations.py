@@ -24,6 +24,7 @@ from __future__ import (absolute_import, division,
                         print_function, unicode_literals)
 from builtins import *
 
+import cv2
 from PIL import Image, ImageOps, ImageEnhance
 import math
 from math import floor, ceil
@@ -41,6 +42,7 @@ import warnings
 #    from StringIO import StringIO
 # except ImportError:
 #    from io import StringIO
+from scipy.ndimage import gaussian_filter
 
 
 class Operation(object):
@@ -86,6 +88,60 @@ class Operation(object):
          PIL.Image.
         """
         raise RuntimeError("Illegal call to base class.")
+
+
+class ElasticTransformation(Operation):
+    """
+    The class :class:`ElasticTransformation` is used to perform elastic transformation
+     on images passed to its :func:`perform_operation` function.
+    """
+    def __init__(self, probability, alpha, sigma, alpha_affine):
+        Operation.__init__(self, probability)
+        self.alpha = alpha
+        self.sigma = sigma
+        self.alpha_affine = alpha_affine
+
+    def perform_operation(self, images):
+
+        def do(image, alpha, sigma, alpha_affine):
+            random_state = np.random.RandomState(None)
+
+            image = np.array(image)
+            image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+            shape = image.shape
+            shape_size = shape[:2]
+
+            # Random affine
+            center_square = np.float32(shape_size) // 2
+            square_size = min(shape_size) // 3
+            pts1 = np.float32(
+                [center_square + square_size, [center_square[0] + square_size, center_square[1] - square_size],
+                 center_square - square_size])
+            pts2 = pts1 + random_state.uniform(-alpha_affine, alpha_affine, size=pts1.shape).astype(np.float32)
+            M = cv2.getAffineTransform(pts1, pts2)
+            image = cv2.warpAffine(image, M, shape_size[::-1], borderMode=cv2.BORDER_REFLECT_101,
+                                   flags=cv2.INTER_NEAREST)
+
+            # *shape = height, width
+            dx = gaussian_filter((random_state.rand(shape_size[0], shape_size[1]) * 2 - 1), sigma,
+                                 mode='nearest') * alpha
+            dy = gaussian_filter((random_state.rand(shape_size[0], shape_size[1]) * 2 - 1), sigma,
+                                 mode='nearest') * alpha
+
+            x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+            mapx = np.float32(x + dx)
+            mapy = np.float32(y + dy)
+            return cv2.remap(image, mapx, mapy, cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT101)
+
+        alpha = self.alpha
+        sigma = self.sigma
+        alpha_affine = self.alpha_affine
+        augmented_images = []
+        for image in images:
+            augmented_images.append(do(image, alpha, sigma, alpha_affine))
+
+        return augmented_images
 
 
 class HistogramEqualisation(Operation):
@@ -614,7 +670,7 @@ class Skew(Operation):
             return image.transform(image.size,
                                    Image.PERSPECTIVE,
                                    perspective_skew_coefficients_matrix,
-                                   resample=Image.BICUBIC)
+                                   resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -666,7 +722,7 @@ class RotateStandard(Operation):
             rotation = random_right
 
         def do(image):
-            return image.rotate(rotation, expand=self.expand, resample=Image.BICUBIC, fillcolor=self.fillcolor)
+            return image.rotate(rotation, expand=self.expand, resample=Image.NONE, fillcolor=self.fillcolor)
 
         augmented_images = []
 
@@ -813,7 +869,7 @@ class RotateRange(Operation):
             y = image.size[1]
 
             # Rotate, while expanding the canvas size
-            image = image.rotate(rotation, expand=True, resample=Image.BICUBIC)
+            image = image.rotate(rotation, expand=True, resample=Image.NEAREST)
 
             # Get size after rotation, which includes the empty space
             X = image.size[0]
@@ -843,7 +899,7 @@ class RotateRange(Operation):
             image = image.crop((int(round(E)), int(round(A)), int(round(X - E)), int(round(Y - A))))
 
             # Return the image, re-sized to the size of the image passed originally
-            return image.resize((x, y), resample=Image.BICUBIC)
+            return image.resize((x, y), resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -1264,11 +1320,11 @@ class Shear(Operation):
                 image = image.transform((int(round(width + shift_in_pixels)), height),
                                         Image.AFFINE,
                                         transform_matrix,
-                                        Image.BICUBIC)
+                                        Image.NEAREST)
 
                 image = image.crop((abs(shift_in_pixels), 0, width, height))
 
-                return image.resize((width, height), resample=Image.BICUBIC)
+                return image.resize((width, height), resample=Image.NEAREST)
 
             elif direction == "y":
                 shift_in_pixels = phi * width
@@ -1285,11 +1341,11 @@ class Shear(Operation):
                 image = image.transform((width, int(round(height + shift_in_pixels))),
                                         Image.AFFINE,
                                         transform_matrix,
-                                        Image.BICUBIC)
+                                        Image.NEAREST)
 
                 image = image.crop((0, abs(shift_in_pixels), width, height))
 
-                return image.resize((width, height), resample=Image.BICUBIC)
+                return image.resize((width, height), resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -1342,7 +1398,7 @@ class Scale(Operation):
             new_h = int(h * self.scale_factor)
             new_w = int(w * self.scale_factor)
 
-            return image.resize((new_w, new_h), resample=Image.BICUBIC)
+            return image.resize((new_w, new_h), resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -1486,7 +1542,7 @@ class Distort(Operation):
 
         def do(image):
 
-            return image.transform(image.size, Image.MESH, generated_mesh, resample=Image.BICUBIC)
+            return image.transform(image.size, Image.MESH, generated_mesh, resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -1686,7 +1742,7 @@ class GaussianDistortion(Operation):
             for i in range(len(dimensions)):
                 generated_mesh.append([dimensions[i], polygons[i]])
 
-            return image.transform(image.size, Image.MESH, generated_mesh, resample=Image.BICUBIC)
+            return image.transform(image.size, Image.MESH, generated_mesh, resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -1739,7 +1795,7 @@ class Zoom(Operation):
 
             image_zoomed = image.resize((int(round(image.size[0] * factor)),
                                          int(round(image.size[1] * factor))),
-                                         resample=Image.BICUBIC)
+                                         resample=Image.NEAREST)
             w_zoomed, h_zoomed = image_zoomed.size
 
             return image_zoomed.crop((floor((float(w_zoomed) / 2) - (float(w) / 2)),
@@ -1809,7 +1865,7 @@ class ZoomRandom(Operation):
         def do(image):
             image = image.crop((random_left_shift, random_down_shift, w_new + random_left_shift, h_new + random_down_shift))
 
-            return image.resize((w, h), resample=Image.BICUBIC)
+            return image.resize((w, h), resample=Image.NEAREST)
 
         augmented_images = []
 
@@ -2014,7 +2070,7 @@ class ZoomGroundTruth(Operation):
             w, h = image.size
 
             # TODO: Join these two functions together so that we don't have this image_zoom variable lying around.
-            image_zoomed = image.resize((int(round(image.size[0] * factor)), int(round(image.size[1] * factor))), resample=Image.BICUBIC)
+            image_zoomed = image.resize((int(round(image.size[0] * factor)), int(round(image.size[1] * factor))), resample=Image.NEAREST)
             w_zoomed, h_zoomed = image_zoomed.size
 
             return image_zoomed.crop((floor((float(w_zoomed) / 2) - (float(w) / 2)),

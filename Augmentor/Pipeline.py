@@ -843,6 +843,13 @@ class Pipeline(object):
     #    # https://patrykchrabaszcz.github.io/Imagenet32/
     #    self.add_operation(Mean(probability=probability))
 
+    def elastic_transformation(self, probability, alpha, sigma, alpha_affine):
+        if not 0 < probability <= 1:
+            raise ValueError(Pipeline._probability_error_text)
+        else:
+            self.add_operation(ElasticTransformation(probability=probability,
+                                                     alpha=alpha, sigma=sigma, alpha_affine=alpha_affine))
+
     def rotate90(self, probability):
         """
         Rotate an image by 90 degrees.
